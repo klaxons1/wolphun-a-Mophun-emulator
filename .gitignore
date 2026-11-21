@@ -18,6 +18,8 @@ android/.cxx/
 # ---- game ROMs / user data (never commit) ----
 *.mpn
 saves/
+# decompiler output: derived from the game ROMs, regenerate it with desktop/decompile.*
+decompiled/
 
 # ---- OS ----
 .DS_Store

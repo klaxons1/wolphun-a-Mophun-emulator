@@ -24,10 +24,10 @@ public final class Pip2 {
     public long instr = 0;
     public long stubCalls = 0;
 
-    // pool resolvido
-    final long[]   poolValue;
-    final boolean[] poolIsImport;
-    final String[] poolName;
+    // pool resolvido (publico: o decompilador wolphun.decomp le os mesmos valores relocados)
+    public final long[]   poolValue;
+    public final boolean[] poolIsImport;
+    public final String[] poolName;
 
     public Pip2(Vmgp exe, int heapBytes, int stackBytes){
         this.exe = exe;

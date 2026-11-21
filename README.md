@@ -168,6 +168,12 @@ build.cmd fp1          REM Symbian 9.2+     (build.cmd 3rd for 9.1)
 
 >  You provide your own game files — **this project does not include any game ROMs.**
 
+### PIP2 -> Java decompiler
+`desktop/decompile.sh game.mpn Name` (or `decompile.bat`) turns a game's bytecode into one
+readable Java class that also compiles and runs on the emulator's SDK. It is verified frame by
+frame against the interpreter (`verify-decompiled.sh`). See [docs/DECOMPILER.md](docs/DECOMPILER.md),
+and [docs/MPN_FORMAT.md](docs/MPN_FORMAT.md) for the `.mpn`/VMGP file format and the PIP2 instruction set.
+
 ## Repository layout
 ```
 desktop/    Java SE version   (PIP2 VM + software SDK + Swing GUI)
