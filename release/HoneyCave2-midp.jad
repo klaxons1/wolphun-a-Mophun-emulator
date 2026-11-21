@@ -5,6 +5,6 @@ MIDlet-Description: Honey Cave 2 (native MIDP 2.0 port)
 MIDlet-Icon: /icon.png
 MIDlet-1: Honey Cave 2, /icon.png, hc2.HC2
 MIDlet-Jar-URL: HoneyCave2-midp.jar
-MIDlet-Jar-Size: 61829
+MIDlet-Jar-Size: 61980
 MicroEdition-Configuration: CLDC-1.1
 MicroEdition-Profile: MIDP-2.0

@@ -16,12 +16,15 @@ import wolphun.vm.Vmgp;
  * <ul>
  *   <li>s.png: every shared sprite (VMGP NativeSprite, RGB332, colour 0 = transparent) in one
  *       atlas; b0..b3.png: the boss sprites of each level (they live in the level resources);</li>
- *   <li>t0.png / t1.png / t2.png: level, menu and HUD 8x8 tile sets for TiledLayer, every tile
- *       twice (opaque first, then with colour 0 transparent);</li>
+ *   <li>t0.png / t1.png / t2.png: level, menu and HUD 8x8 tile sets for TiledLayer. Only the
+ *       tile variants the maps use (opaque, or with colour 0 transparent), identical ones merged;</li>
+ *   <li>map0..map6.bin: menu, the four levels, wide / small HUD: cells already as TiledLayer
+ *       indices (128+j = animated sequence j), the animated sequences, collision attributes
+ *       (levels only) and the objects. One file per map, so the game only loads what it needs;</li>
  *   <li>f.png: the 2-bit game font (score / lives digits) in its two palettes;</li>
  *   <li>m0..m7.mid: the sound effects (standard MIDI files embedded in the data section);</li>
- *   <li>d.bin: sprite table, maps (tiles, attributes, objects), sky colours, boss path, font map
- *       and the English texts of the language resource.</li>
+ *   <li>d.bin: sprite table, sky colours, boss path, font map and the English texts of the
+ *       language resource.</li>
  * </ul>
  * The layout of d.bin is read by hc2.Res (keep both in sync).
  *
@@ -133,13 +136,12 @@ public final class Hc2Assets {
 
         // ---------------------------------------------------------------- tiles + maps
         byte[][] tiles={ res(10), res(11), res(15) };
-        for(int t=0;t<3;t++){
-            int n=tiles[t].length/64;
-            d.writeShort(n);
-            writeTiles(tiles[t], n, new File(out, "t"+t+".png"));
-        }
         int[][] maps={ {12,1}, {4,0}, {5,0}, {6,0}, {7,0}, {13,2}, {14,2} };
-        for(int[] m: maps) writeMap(d, res(m[0]), m[1]);
+        MapData[] md=new MapData[maps.length];
+        for(int m=0;m<maps.length;m++) md[m]=readMap(res(maps[m][0]), maps[m][1]);
+        int tileSlots=0;
+        for(int t=0;t<3;t++) tileSlots+=writeTiles(tiles[t], t, md, new File(out, "t"+t+".png"));
+        for(int m=0;m<maps.length;m++) writeMap(md[m], m>=1 && m<=4, new File(out, "map"+m+".bin"));
 
         // ---------------------------------------------------------------- texts (res9, UTF-16LE)
         byte[] r9=res(9);
@@ -172,7 +174,7 @@ public final class Hc2Assets {
             Files.write(new File(out, "m"+i+".mid").toPath(), m);
         }
         System.out.println("HC2 assets: "+sprites.size()+" sprites, "+nGlyphs+" glyphs, "
-                +str.length+" strings -> "+out);
+                +tileSlots+" tiles, "+str.length+" strings -> "+out);
     }
 
     static String strip(String s){ return s.endsWith("\r") ? s.substring(0, s.length()-1) : s; }
@@ -215,42 +217,109 @@ public final class Hc2Assets {
     }
 
     // ---------------------------------------------------------------- tiles / maps
-    /** RGB332 8x8 tiles: index k+1 = opaque tile k, index n+k+1 = tile k with colour 0 transparent */
-    static void writeTiles(byte[] t, int n, File f) throws IOException {
-        int cols=16, rows=(2*n+cols-1)/cols;
-        BufferedImage im=new BufferedImage(cols*8, rows*8, BufferedImage.TYPE_INT_ARGB);
-        for(int v=0;v<2;v++) for(int k=0;k<n;k++){
-            int idx=v*n+k, tx=(idx%cols)*8, ty=(idx/cols)*8;
-            for(int i=0;i<64;i++){
-                int c=t[k*64+i]&0xff;
-                im.setRGB(tx+(i&7), ty+(i>>3), (v==1 && c==0) ? 0 : RGB332[c]);
-            }
-        }
-        ImageIO.write(im, "png", f);
+    /** layer 0 of a map resource, plus what the TiledLayer needs once the tiles are numbered */
+    static final class MapData {
+        int set, flag, w, h, anim; byte[] tile, attr; int[] kind, ox, oy;
+        int[] cell;                               // TiledLayer cell: slot, 128+j = sequence j, 0
+        List<int[]> seqs=new ArrayList<int[]>();  // animated sequences (slots of the frames)
     }
 
     /**
      * Map resource: 8-byte header (u8 @2 = layer count, s16 @6 = object count), 24-byte layer
      * headers (flag, format, w, h, anim, firstObject, objectCount, ...), 8-byte objects
      * (u32 kind/params, u16 tileX, u16 tileY), then the cell data of every layer (1 byte = tile+1,
-     * plus 1 attribute byte when flag != 0). Only layer 0 is used by the game.
+     * plus 1 attribute byte when flag != 0). Only layer 0 is used by the game. Attribute bit 0 =
+     * draw colour 0 transparent, bits 6/7 = animate over the next 2 / 4 tiles.
      */
-    static void writeMap(DataOutputStream d, byte[] m, int tileset) throws IOException {
+    static MapData readMap(byte[] m, int tileset){
         int layers=m[2]&0xff, nobj=(short)le16(m, 6);
-        int lh=8, flag=m[lh]&0xff, fmt=m[lh+1]&0xff, w=m[lh+2]&0xff, h=m[lh+3]&0xff, anim=m[lh+4]&0xff;
-        int first=(m[lh+5]&0xff)-(m[lh+5]&0xff), count=m[lh+6]&0xff;
+        int lh=8, fmt=m[lh+1]&0xff;
+        MapData d=new MapData();
+        d.set=tileset; d.flag=m[lh]&0xff; d.w=m[lh+2]&0xff; d.h=m[lh+3]&0xff; d.anim=m[lh+4]&0xff;
+        int count=m[lh+6]&0xff;
         if(fmt!=7) throw new IllegalStateException("map format "+fmt);
         int objOff=8+layers*24;
         int cellOff=objOff+Math.max(0, nobj)*8;
-        int cell = flag!=0 ? 2 : 1;
-        d.writeByte(flag); d.writeByte(w); d.writeByte(h); d.writeByte(anim); d.writeByte(tileset);
-        for(int i=0;i<w*h;i++) d.writeByte(m[cellOff+i*cell]);
-        if(flag!=0) for(int i=0;i<w*h;i++) d.writeByte(m[cellOff+i*cell+1]);
-        d.writeShort(count);
-        for(int k=first;k<first+count;k++){
-            int o=objOff+k*8;
-            d.writeInt(le32(m, o)); d.writeShort(le16(m, o+4)); d.writeShort(le16(m, o+6));
+        int cell = d.flag!=0 ? 2 : 1, n=d.w*d.h;
+        d.tile=new byte[n]; d.attr=new byte[n];
+        for(int i=0;i<n;i++){
+            d.tile[i]=m[cellOff+i*cell];
+            if(d.flag!=0) d.attr[i]=m[cellOff+i*cell+1];
         }
+        d.kind=new int[count]; d.ox=new int[count]; d.oy=new int[count];
+        for(int k=0;k<count;k++){
+            int o=objOff+k*8;
+            d.kind[k]=le32(m, o); d.ox[k]=le16(m, o+4); d.oy[k]=le16(m, o+6);
+        }
+        return d;
+    }
+
+    /**
+     * Tile set t as a 16-column sheet holding only the variants its maps use (tile k opaque, or
+     * with colour 0 transparent), identical 8x8 pictures sharing a slot; numbers the cells of the
+     * maps of this set. Returns the number of slots.
+     */
+    static int writeTiles(byte[] t, int set, MapData[] maps, File f) throws IOException {
+        int n=t.length/64;
+        Map<String,Integer> byPixels=new HashMap<String,Integer>();
+        List<int[]> slots=new ArrayList<int[]>();
+        int[] slotOf=new int[2*n];                       // variant (k*2 + transparent) -> slot
+        for(MapData m: maps){
+            if(m.set!=set) continue;
+            m.cell=new int[m.w*m.h];
+            Map<String,Integer> seqIdx=new HashMap<String,Integer>();
+            for(int i=0;i<m.cell.length;i++){
+                int k=(m.tile[i]&0xff)-1;
+                if(k<0) continue;
+                int a=m.attr[i]&0xff, tr=a&1;
+                int frames = (a&0x40)!=0 ? 2 : (a&0x80)!=0 ? 4 : 1;
+                int[] fs=new int[frames];
+                for(int fr=0;fr<frames;fr++) fs[fr]=slot(t, n, k+fr, tr, slotOf, byPixels, slots);
+                if(frames==1){ m.cell[i]=fs[0]; continue; }
+                String key=Arrays.toString(fs);
+                Integer j=seqIdx.get(key);
+                if(j==null){ j=m.seqs.size(); m.seqs.add(fs); seqIdx.put(key, j); }
+                m.cell[i]=128+j;
+            }
+            if(m.seqs.size()>127) throw new IllegalStateException("too many animated sequences");
+        }
+        if(slots.size()>127) throw new IllegalStateException("too many tiles: "+slots.size());
+        int cols=16, rows=Math.max(1, (slots.size()+cols-1)/cols);
+        BufferedImage im=new BufferedImage(cols*8, rows*8, BufferedImage.TYPE_INT_ARGB);
+        for(int s=0;s<slots.size();s++) im.setRGB((s%cols)*8, (s/cols)*8, 8, 8, slots.get(s), 0, 8);
+        ImageIO.write(im, "png", f);
+        return slots.size();
+    }
+    static int slot(byte[] t, int n, int k, int tr, int[] slotOf, Map<String,Integer> byPixels, List<int[]> slots){
+        if(k>=n) throw new IllegalStateException("animated tile past the end of the set");
+        int v=k*2+tr;
+        if(slotOf[v]!=0) return slotOf[v];
+        int[] px=new int[64];
+        for(int i=0;i<64;i++){ int c=t[k*64+i]&0xff; px[i] = (tr==1 && c==0) ? 0 : RGB332[c]; }
+        String key=Arrays.toString(px);
+        Integer s=byPixels.get(key);
+        if(s==null){ slots.add(px); s=slots.size(); byPixels.put(key, s); }
+        slotOf[v]=s;
+        return s;
+    }
+
+    /**
+     * mapN.bin (read by hc2.Res.loadMap): u8 w, h, anim, attr?; w*h cells (TiledLayer index,
+     * 128+j = sequence j); u8 sequences, each u8 frames + frame slots; w*h attribute bytes if attr;
+     * u16 objects, each s32 kind, u16 x, u16 y.
+     */
+    static void writeMap(MapData m, boolean attrs, File f) throws IOException {
+        ByteArrayOutputStream bo=new ByteArrayOutputStream();
+        DataOutputStream d=new DataOutputStream(bo);
+        d.writeByte(m.w); d.writeByte(m.h); d.writeByte(m.anim); d.writeByte(attrs ? 1 : 0);
+        for(int i=0;i<m.cell.length;i++) d.writeByte(m.cell[i]);
+        d.writeByte(m.seqs.size());
+        for(int[] fs: m.seqs){ d.writeByte(fs.length); for(int x: fs) d.writeByte(x); }
+        if(attrs) d.write(m.attr);
+        d.writeShort(m.kind.length);
+        for(int k=0;k<m.kind.length;k++){ d.writeInt(m.kind[k]); d.writeShort(m.ox[k]); d.writeShort(m.oy[k]); }
+        d.flush();
+        Files.write(f.toPath(), bo.toByteArray());
     }
 
     // ---------------------------------------------------------------- container

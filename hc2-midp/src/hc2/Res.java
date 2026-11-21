@@ -28,12 +28,10 @@ final class Res {
     Image font;
 
     // ------------------------------------------------------------------ tiles and maps
-    static final int MAP_MENU=0, MAP_LEVEL=1, MAP_HUD_WIDE=5, MAP_HUD_SMALL=6, MAPS=7;
-    final int[] nTiles=new int[3];
+    static final int MAP_MENU=0, MAP_LEVEL=1, MAP_HUD_WIDE=5, MAP_HUD_SMALL=6;
+    /** tile set of each map: 0 level, 1 menu, 2 HUD */
+    static final int[] MAP_SET={1, 0, 0, 0, 0, 2, 2};
     final Image[] tiles=new Image[3];
-    final int[] mFlag=new int[MAPS], mW=new int[MAPS], mH=new int[MAPS], mAnim=new int[MAPS], mSet=new int[MAPS];
-    final byte[][] mCell=new byte[MAPS][], mAttr=new byte[MAPS][];
-    final int[][] oKind=new int[MAPS][], oX=new int[MAPS][], oY=new int[MAPS][];
 
     // ------------------------------------------------------------------ texts
     String[] str; String help;
@@ -55,17 +53,6 @@ final class Res {
         for(int i=0;i<24;i++) sky[i]=d.readUnsignedShort();
         d.readFully(path);
         d.readFully(fontMap);
-        for(int t=0;t<3;t++) nTiles[t]=d.readUnsignedShort();
-        for(int m=0;m<MAPS;m++){
-            mFlag[m]=d.readUnsignedByte(); mW[m]=d.readUnsignedByte(); mH[m]=d.readUnsignedByte();
-            mAnim[m]=d.readUnsignedByte(); mSet[m]=d.readUnsignedByte();
-            int cells=mW[m]*mH[m];
-            mCell[m]=new byte[cells]; d.readFully(mCell[m]);
-            if(mFlag[m]!=0){ mAttr[m]=new byte[cells]; d.readFully(mAttr[m]); }
-            int no=d.readUnsignedShort();
-            oKind[m]=new int[no]; oX[m]=new int[no]; oY[m]=new int[no];
-            for(int i=0;i<no;i++){ oKind[m][i]=d.readInt(); oX[m][i]=d.readUnsignedShort(); oY[m][i]=d.readUnsignedShort(); }
-        }
         str=new String[d.readUnsignedShort()];
         for(int i=0;i<str.length;i++) str[i]=d.readUTF();
         help=d.readUTF();
@@ -96,59 +83,64 @@ final class Res {
         g.drawRegion(im, sX[id], sY[id], sW[id], sH[id], 0, x-sCX[id], y-sCY[id], Graphics.TOP|Graphics.LEFT);
     }
 
-    /** map attribute byte; coordinates are bytes in the original (vMapGetAttribute(byte, byte)) */
-    int attr(int m, int x, int y){
-        x&=0xff; y&=0xff;
-        byte[] a=mAttr[m];
-        if(a==null || x>=mW[m] || y>=mH[m]) return 0;
-        return a[y*mW[m]+x]&0xff;
-    }
 
-    // ------------------------------------------------------------------ TiledLayer
-    /** a map as a TiledLayer plus its animated cells (attribute bits 6/7: 2 or 4 frame cycles) */
+    // ------------------------------------------------------------------ maps
+    /** a map as a TiledLayer plus its animated sequences (2 or 4 frames) */
     static final class Layer {
         TiledLayer tl;
         int anim;                                   // frames between animation steps (0 = still)
-        int count; int[] idx=new int[8], base=new int[8], mode=new int[8];
-        /** sets every animated tile to frame f (0..3) of its cycle */
-        void sync(int f){ for(int i=0;i<count;i++) tl.setAnimatedTile(idx[i], base[i]+f%mode[i]); }
+        int count, last=-1; int[] idx; byte[][] frames;
+        /** shows frame f (0..3) of every animated sequence */
+        void sync(int f){
+            if(f==last) return;
+            last=f;
+            for(int i=0;i<count;i++){ byte[] fr=frames[i]; tl.setAnimatedTile(idx[i], fr[f%fr.length]); }
+        }
+    }
+
+    /** what the game keeps of a map: size, collision attributes (levels), objects, the layer */
+    static final class Map {
+        int w, h; byte[] attr; int[] kind, ox, oy; Layer layer;
     }
 
     /**
-     * Builds map m as a TiledLayer. Tile k of the set is static tile k+1 (opaque) or n+k+1 (colour
-     * 0 transparent, attribute bit 0); animated cells step over consecutive tiles.
+     * Loads /mapN.bin (written by tools/Hc2Assets: cells already numbered for the tile set) and
+     * builds its TiledLayer; the cell bytes are only kept until the layer is filled.
      */
-    Layer layer(int m){
-        int n=nTiles[mSet[m]], w=mW[m], h=mH[m];
-        Layer L=new Layer();
-        L.anim=mAnim[m];
-        TiledLayer tl=new TiledLayer(w, h, tiles[mSet[m]], 8, 8);
-        L.tl=tl;
-        byte[] cell=mCell[m], at=mAttr[m];
-        int[] lookup=null;
-        for(int y=0;y<h;y++) for(int x=0;x<w;x++){
-            int i=y*w+x, t=cell[i]&0xff;
-            if(t==0) continue;
-            int a = at!=null ? at[i]&0xff : 0;
-            int base = (a&1)!=0 ? n+t : t;
-            int mode = (a&0x40)!=0 ? 2 : (a&0x80)!=0 ? 4 : 0;
-            if(mode==0){ tl.setCell(x, y, base); continue; }
-            if(lookup==null) lookup=new int[(2*n+1)*2];
-            int key=base*2+(mode>>2);
-            if(lookup[key]==0){
-                if(L.count==L.idx.length){
-                    int c=L.count;
-                    int[] a1=new int[c*2], a2=new int[c*2], a3=new int[c*2];
-                    System.arraycopy(L.idx, 0, a1, 0, c); System.arraycopy(L.base, 0, a2, 0, c);
-                    System.arraycopy(L.mode, 0, a3, 0, c);
-                    L.idx=a1; L.base=a2; L.mode=a3;
-                }
-                lookup[key]=tl.createAnimatedTile(base);
-                L.idx[L.count]=lookup[key]; L.base[L.count]=base; L.mode[L.count]=mode; L.count++;
+    Map loadMap(int m) throws IOException {
+        DataInputStream d=new DataInputStream(open("/map"+m+".bin"));
+        try {
+            Map M=new Map();
+            int w=d.readUnsignedByte(), h=d.readUnsignedByte();
+            M.w=w; M.h=h;
+            Layer L=new Layer();
+            L.anim=d.readUnsignedByte();
+            boolean attrs=d.readUnsignedByte()!=0;
+            byte[] cell=new byte[w*h];
+            d.readFully(cell);
+            int ns=d.readUnsignedByte();
+            TiledLayer tl=new TiledLayer(w, h, tiles[MAP_SET[m]], 8, 8);
+            L.tl=tl; L.count=ns; L.idx=new int[ns]; L.frames=new byte[ns][];
+            for(int j=0;j<ns;j++){
+                byte[] fr=new byte[d.readUnsignedByte()];
+                d.readFully(fr);
+                L.frames[j]=fr;
+                L.idx[j]=tl.createAnimatedTile(fr[0]);
             }
-            tl.setCell(x, y, lookup[key]);
+            for(int y=0, i=0;y<h;y++) for(int x=0;x<w;x++, i++){
+                int c=cell[i]&0xff;
+                if(c!=0) tl.setCell(x, y, c<128 ? c : L.idx[c-128]);
+            }
+            cell=null;
+            if(attrs){ M.attr=new byte[w*h]; d.readFully(M.attr); }
+            int no=d.readUnsignedShort();
+            M.kind=new int[no]; M.ox=new int[no]; M.oy=new int[no];
+            for(int i=0;i<no;i++){ M.kind[i]=d.readInt(); M.ox[i]=d.readUnsignedShort(); M.oy[i]=d.readUnsignedShort(); }
+            M.layer=L;
+            return M;
+        } finally {
+            d.close();
         }
-        return L;
     }
 
     static InputStream open(String name) throws IOException {

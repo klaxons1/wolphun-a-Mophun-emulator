@@ -83,7 +83,7 @@ final class Game extends GameCanvas implements Runnable {
 
     // ------------------------------------------------------------------ maps
     Res.Layer menuLayer, levelLayer, hudLayer;
-    int levelMap;
+    Res.Map lvl;                    // map of the level being played (attributes, objects)
     int frameAnimate, framePassed;
 
     // ------------------------------------------------------------------ sprite slots
@@ -234,9 +234,10 @@ final class Game extends GameCanvas implements Runnable {
                 case ST_GAME_OVER:  stGameOver(); break;
             }
             flip();
-            while(now()<next){
-                try { Thread.sleep(5); } catch(InterruptedException e){}
-            }
+            // 75 ms tick like the original (wait for vGetTickCount >= next, then next = now + 75),
+            // but one sleep for the remainder instead of polling
+            long d=next-now();
+            if(d>0){ try { Thread.sleep(d); } catch(InterruptedException e){} }
             next=now()+75;
         }
     }
@@ -394,26 +395,60 @@ final class Game extends GameCanvas implements Runnable {
         g.fillRect(0, 0, W, H);
         for(int x=0;x<W;x+=128) paintLayer(menuLayer, x, 0);
     }
-    int attr(int x, int y){ return res.attr(levelMap, x, y); }
+    /** map attribute byte; coordinates are bytes in the original (vMapGetAttribute(byte, byte)) */
+    int attr(int x, int y){
+        x&=0xff; y&=0xff;
+        Res.Map m=lvl;
+        if(x>=m.w || y>=m.h) return 0;
+        return m.attr[y*m.w+x]&0xff;
+    }
+    Res.Layer loadLayer(int m){
+        try { return res.loadMap(m).layer; } catch(IOException e){ throw new RuntimeException(e.toString()); }
+    }
 
     // ------------------------------------------------------------------ sound / vibra
+    /** sound ids a phone refused even after freeing the other players (not retried) */
+    int soundFailed;
+    static final String[] MIDI={"/m0.mid","/m1.mid","/m2.mid","/m3.mid","/m4.mid","/m5.mid","/m6.mid","/m7.mid"};
+
+    /**
+     * Plays MIDI effect i. Players are created once and kept prefetched (instant restart); a phone
+     * that allows fewer prefetched players gets the others closed and one retry.
+     */
     void play(int i){
-        if(!sound) return;
-        try {
-            Player p=players[i];
+        if(!sound || (soundFailed&(1<<i))!=0) return;
+        Player p=players[i];
+        if(p==null){
+            p=createPlayer(i);
             if(p==null){
-                p=Manager.createPlayer(Res.open("/m"+i+".mid"), "audio/midi");
-                p.realize();
-                p.prefetch();
-                players[i]=p;
+                closeSound();                               // free what the phone holds, retry once
+                p=createPlayer(i);
+                if(p==null){ soundFailed|=1<<i; return; }
             }
+            players[i]=p;
+        }
+        try {
             if(playing!=null && playing!=p){ try { playing.stop(); } catch(Exception e){} }
             p.stop();
             p.setMediaTime(0);
             p.start();
             playing=p;
         } catch(Throwable t){
-            sound=false;
+            try { p.close(); } catch(Throwable e){}
+            players[i]=null;
+            if(playing==p) playing=null;
+        }
+    }
+    Player createPlayer(int i){
+        Player p=null;
+        try {
+            p=Manager.createPlayer(Res.open(MIDI[i]), "audio/midi");
+            p.realize();
+            p.prefetch();
+            return p;
+        } catch(Throwable t){
+            if(p!=null) try { p.close(); } catch(Throwable e){}
+            return null;
         }
     }
     void closeSound(){
@@ -447,7 +482,7 @@ final class Game extends GameCanvas implements Runnable {
         clear(rgb555(C_MENU_BG));
         if(menuReq!=0){
             hourglass();
-            if(menuLayer==null) menuLayer=res.layer(Res.MAP_MENU);
+            if(menuLayer==null) menuLayer=loadLayer(Res.MAP_MENU);
             menuReq=0;
         }
         String[] items = resumeFlag
@@ -547,7 +582,7 @@ final class Game extends GameCanvas implements Runnable {
         flip();
         while(pollKeys()==K_FIRE) { }
         while(pollKeys()!=K_FIRE) { }
-        if(menuLayer==null) menuLayer=res.layer(Res.MAP_MENU);
+        if(menuLayer==null) menuLayer=loadLayer(Res.MAP_MENU);
         menuReq=0;
         int row=insertHighscore(score, level+1);
         highscores(row);
@@ -560,14 +595,16 @@ final class Game extends GameCanvas implements Runnable {
     void startLevel(){
         hour=0;
         try { res.loadBosses(level); } catch(IOException e){ throw new RuntimeException(e.toString()); }
-        levelMap=Res.MAP_LEVEL+level;
+        lvl=null;
         levelLayer=null;
         System.gc();
-        levelLayer=res.layer(levelMap);
-        if(hudLayer==null) hudLayer=res.layer(W>127 ? Res.MAP_HUD_WIDE : Res.MAP_HUD_SMALL);
+        try { lvl=res.loadMap(Res.MAP_LEVEL+level); } catch(IOException e){ throw new RuntimeException(e.toString()); }
+        levelLayer=lvl.layer;
+        if(hudLayer==null) hudLayer=loadLayer(W>127 ? Res.MAP_HUD_WIDE : Res.MAP_HUD_SMALL);
         spawnMask = level==0 ? 31 : level==1 ? 15 : level==2 ? 7 : 3;
-        maxCamX=(short)((res.mW[levelMap]<<3)-W);
-        maxCamY=(short)((res.mH[levelMap]<<3)-H+16);
+        maxCamX=(short)((lvl.w<<3)-W);
+        maxCamY=(short)((lvl.h<<3)-H+16);
+        clockSync();
         rng=now()&0xffffffffL;
         spawnObjects();
         resetPlayer();
@@ -586,8 +623,7 @@ final class Game extends GameCanvas implements Runnable {
     /** creates the objects of the level map */
     void spawnObjects(){
         bossX=0; bossY=0;
-        int m=levelMap;
-        int[] kind=res.oKind[m], tx=res.oX[m], ty=res.oY[m];
+        int[] kind=lvl.kind, tx=lvl.ox, ty=lvl.oy;
         for(int k=0;k<kind.length;k++){
             int t=kind[k]&0x1F, x=tx[k]<<3, y=ty[k]<<3, s;
             switch(t){
@@ -661,10 +697,16 @@ final class Game extends GameCanvas implements Runnable {
         oVY[PL]=0; oB4[PL]=0; oB5[PL]=30;
     }
 
+    long dayMs, clockT0;
+    /** reads the time of day once (Calendar allocates); skyBody() advances it by the tick count */
+    void clockSync(){
+        Calendar c=Calendar.getInstance();
+        dayMs=c.get(Calendar.HOUR_OF_DAY)*3600000L+c.get(Calendar.MINUTE)*60000L+c.get(Calendar.SECOND)*1000L;
+        clockT0=now();
+    }
     /** sun by day (height from the hour), moon at night */
     void skyBody(){
-        Calendar c=Calendar.getInstance();
-        hour=c.get(Calendar.HOUR_OF_DAY);
+        hour=(int)(((dayMs+now()-clockT0)/3600000L)%24);
         sunY=20;
         if(((hour+250)&0xFF)>12) sunSpr=spr(SP_MOON);
         else {
