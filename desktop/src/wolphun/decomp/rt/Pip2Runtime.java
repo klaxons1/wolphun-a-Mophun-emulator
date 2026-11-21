@@ -33,6 +33,13 @@ public abstract class Pip2Runtime {
     /** optional hook run after every SDK call (used by the runner to stop after N frames) */
     public Runnable afterSys;
     public long sysCalls;
+    /**
+     * Interactive play: when the game busy-waits on vGetButtonData/vGetTickCount without
+     * flipping the screen (menus, frame throttle), sleep 1 ms now and then instead of burning a
+     * CPU core. Time-based behaviour is unchanged (the game reads the real clock).
+     */
+    public boolean realTime;
+    private int pollsSinceFlip;
     /** when set, every SDK call is logged as "name(args) -> result" */
     public SdkTrace tracer;
     /** optional hook run before every SDK call (the runner uses it for scripted input) */
@@ -134,6 +141,12 @@ public abstract class Pip2Runtime {
         vm.setReg(Pip2.SP, sp);
         vm.setReg(Pip2.P0, a0); vm.setReg(Pip2.P1, a1); vm.setReg(Pip2.P2, a2); vm.setReg(Pip2.P3, a3);
         sysCalls++;
+        if(realTime){
+            if(name.equals("vFlipScreen")) pollsSinceFlip=0;
+            else if((name.equals("vGetButtonData") || name.equals("vGetTickCount")) && ++pollsSinceFlip>64){
+                try { Thread.sleep(1); } catch(InterruptedException ie){ Thread.currentThread().interrupt(); }
+            }
+        }
         if(beforeSys!=null) beforeSys.accept(name);
         if(tracer!=null) tracer.before(vm, name);
         sdk.invoke(name);

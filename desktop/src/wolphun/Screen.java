@@ -215,6 +215,12 @@ public final class Screen {
 
     // acesso p/ o host embutido (emulador): canvas p/ inserir na janela + input direto (on-screen)
     public Canvas getCanvas(){ return canvas; }
+    /** window title and icon (no-op when headless/embedded) */
+    public void setWindowTitle(String title, java.awt.Image icon){
+        if(frame==null) return;
+        frame.setTitle(title);
+        if(icon!=null) frame.setIconImage(icon);
+    }
     public void setButtonBit(int bit, boolean down){ if(down) buttons|=bit; else buttons&=~bit; }
     public void clearButtons(){ buttons=0; }
     public boolean autoAdvance=false; public int flips=0; private long gbTick=0;
