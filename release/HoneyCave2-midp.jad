@@ -1,0 +1,10 @@
+MIDlet-Name: Honey Cave 2
+MIDlet-Vendor: wolphun
+MIDlet-Version: 1.0.0
+MIDlet-Description: Honey Cave 2 (native MIDP 2.0 port)
+MIDlet-Icon: /icon.png
+MIDlet-1: Honey Cave 2, /icon.png, hc2.HC2
+MIDlet-Jar-URL: HoneyCave2-midp.jar
+MIDlet-Jar-Size: 62612
+MicroEdition-Configuration: CLDC-1.1
+MicroEdition-Profile: MIDP-2.0

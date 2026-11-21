@@ -28,3 +28,7 @@ Thumbs.db
 # IDE modules
 **/*.iml
 .idea/
+
+# native MIDP port build output / scratch
+hc2-midp/build/
+.cache/
