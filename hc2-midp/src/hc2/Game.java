@@ -11,7 +11,6 @@ import java.util.Vector;
 import javax.microedition.lcdui.Display;
 import javax.microedition.lcdui.Font;
 import javax.microedition.lcdui.Graphics;
-import javax.microedition.lcdui.Image;
 import javax.microedition.lcdui.game.GameCanvas;
 import javax.microedition.media.Manager;
 import javax.microedition.media.Player;
@@ -22,9 +21,9 @@ import javax.microedition.rms.RecordStore;
  *
  * The game runs on one thread (run()). Like the original it owns its main loop: a 75 ms tick that
  * runs the current state and shows the frame; menus, the highscore table and message boxes are
- * blocking sub-loops on the same thread. Everything is drawn with lcdui into an off-screen image of
- * the logical screen (128x128, 128x160 or 176x208, the layouts the game has), which is then shown
- * 1:1 or scaled to the canvas.
+ * blocking sub-loops on the same thread. Everything is drawn with lcdui straight into the
+ * GameCanvas back buffer; like the original, the layout follows the display (full width, height
+ * up to 216).
  *
  * Game objects live in parallel arrays (48 slots, slot 32 = the player, 33 = the player's sting);
  * what the original kept as function pointers are the F_* behaviour codes. Sprites are drawn from
@@ -76,11 +75,9 @@ final class Game extends GameCanvas implements Runnable {
     String error;
 
     // ------------------------------------------------------------------ screen
-    int W, H;                       // logical screen
-    Graphics screen;                // the GameCanvas back buffer (already double-buffered)
-    Graphics g;                     // where the game draws: screen translated to (ox, oy), or buf
-    Image buf; int[] fb, sbuf, xmap; // only with "HC2-Scale: on": logical frame + scaled copy
-    int sw, sh, ox, oy;
+    int W, H;                       // game screen: the display width, min(display height, 216)
+    Graphics g;                     // GameCanvas back buffer, translated to the game screen
+    int oy;                         // top of the game screen on the display
     Font font; int fh;              // system font and its height
     int clipX, clipY, clipW, clipH;
 
@@ -143,8 +140,6 @@ final class Game extends GameCanvas implements Runnable {
         try {
             for(int i=0;i<20 && (getWidth()<=0 || getHeight()<=0 || !isShown());i++) Thread.sleep(50);
             Thread.sleep(100);
-            screen=getGraphics();
-            screen.setColor(0); screen.fillRect(0, 0, getWidth(), getHeight());
             chooseScreen(getWidth(), getHeight());
             res.load();
             gameMain();
@@ -166,43 +161,17 @@ final class Game extends GameCanvas implements Runnable {
     boolean isGameState(){ return state==ST_INTRO || state==ST_PLAY; }
 
     /**
-     * Picks the logical screen: the three layouts of the game (176x208, 128x160, 128x128),
-     * centred on the display. The game draws straight into the GameCanvas back buffer -- no frame
-     * buffer of its own in the heap. JAD "HC2-Screen: WxH" forces a size; "HC2-Scale: on" turns
-     * on nearest-neighbour up-scaling (when it makes the picture at least 25% bigger), which
-     * costs an off-screen image + two int[] frames (~0.5 MB at 240x320) and a copy per frame.
+     * Like the original (vGetCaps): the game uses the whole display width and the display height
+     * up to 216 -- the levels are only 200..272 pixels high. Taller displays get the 216 pixel
+     * band centred. Everything is drawn straight into the GameCanvas back buffer.
      */
     void chooseScreen(int cw, int ch){
-        String forced=midlet.getAppProperty("HC2-Screen");
-        W=0;
-        if(forced!=null){
-            try {
-                int x=forced.indexOf('x');
-                W=Integer.parseInt(forced.substring(0, x).trim()); H=Integer.parseInt(forced.substring(x+1).trim());
-            } catch(Exception e){ W=0; }
-        }
-        if(W<=0 || H<=0){
-            if(cw>=176 && ch>=208){ W=176; H=208; }
-            else if(ch>=160 || cw<128){ W=128; H=160; }
-            else { W=128; H=128; }
-        }
-        if(H>216) H=216;
-        int s=Math.min((cw<<8)/W, (ch<<8)/H);
-        String sc=midlet.getAppProperty("HC2-Scale");
-        boolean scale = sc!=null && sc.trim().equalsIgnoreCase("on");
-        if(s>=320 && scale){
-            sw=(W*s)>>8; sh=(H*s)>>8;
-            buf=Image.createImage(W, H);
-            g=buf.getGraphics();
-            fb=new int[W*H]; sbuf=new int[sw*sh]; xmap=new int[sw];
-            for(int x=0;x<sw;x++) xmap[x]=(x<<8)/s;
-        } else { sw=W; sh=H; }
-        ox=(cw-sw)/2; oy=(ch-sh)/2;
-        if(ox<0) ox=0; if(oy<0) oy=0;
-        if(sbuf==null){
-            g=screen;
-            g.translate(ox, oy);
-        }
+        W=cw;
+        H=ch;
+        oy=(ch-H)>>1;
+        g=getGraphics();
+        g.setColor(0); g.fillRect(0, 0, cw, ch);
+        g.translate(0, oy);
         String snd=midlet.getAppProperty("HC2-Sound");
         if(snd!=null && snd.trim().equalsIgnoreCase("off")) sound=false;
         String vib=midlet.getAppProperty("HC2-Vibra");
@@ -215,18 +184,6 @@ final class Game extends GameCanvas implements Runnable {
         if(paused){
             synchronized(this){ while(paused && !quit){ try { wait(500); } catch(InterruptedException e){} } }
             if(quit) exitGame();
-        }
-        if(sbuf!=null){
-            buf.getRGB(fb, 0, W, 0, 0, W, H);
-            int[] s=sbuf, f=fb, xm=xmap; int prev=-1;
-            for(int y=0;y<sh;y++){
-                int row=y*sw, sy=(y*H)/sh;
-                if(sy==prev){ System.arraycopy(s, row-sw, s, row, sw); continue; }
-                prev=sy;
-                int src=sy*W;
-                for(int x=0;x<sw;x++) s[row+x]=f[src+xm[x]];
-            }
-            screen.drawRGB(s, 0, sw, ox, oy, sw, sh, false);
         }
         flushGraphics();
     }
@@ -336,7 +293,7 @@ final class Game extends GameCanvas implements Runnable {
     void clip(int x0, int y0, int x1, int y1){
         if(x0>x1){ int t=x0; x0=x1; x1=t; }
         if(y0>y1){ int t=y0; y0=y1; y1=t; }
-        // never outside the logical screen (the canvas around it is the black border)
+        // never outside the game screen
         if(x0<0) x0=0; if(y0<0) y0=0;
         if(x1>W-1) x1=W-1; if(y1>H-1) y1=H-1;
         clipX=x0; clipY=y0; clipW=x1-x0+1; clipH=y1-y0+1;
