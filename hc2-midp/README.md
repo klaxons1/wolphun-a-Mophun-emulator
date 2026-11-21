@@ -20,9 +20,9 @@ How it is built:
 - **Graphics.** Sprites are atlas regions drawn with `drawRegion`. Maps are `TiledLayer`s. Tile
   set *n+k+1* is the transparent variant of tile *k*, and the 2- and 4-frame animated tiles use
   `createAnimatedTile`.
-- **Screen.** The game picks the original layout for the screen: 176x208, 128x160 or 128x128. It
-  draws into an off-screen image and scales up (nearest neighbour) when that makes the picture at
-  least 25% bigger.
+- **Screen.** The game picks the original layout for the screen (176x208, 128x160 or 128x128)
+  and centres it. It draws straight into the GameCanvas back buffer through a translated
+  `Graphics`, so it keeps no framebuffer of its own in the heap and does no per-frame copy.
 - **Allocation.** The game loop does not allocate.
 - **Storage.** RMS stores `hc2-highscore` and `hc2-resume`. The game is saved when you quit
   during play and when SELECT is pressed during play. `pauseApp` (a call, for example) freezes
@@ -42,7 +42,7 @@ How it is built:
 | property | effect |
 |---|---|
 | `HC2-Screen: 176x208` | force a layout |
-| `HC2-Scale: off` | no up-scaling |
+| `HC2-Scale: on` | nearest-neighbour up-scaling on big screens (at least 25% gain). This is off by default because it needs an off-screen image plus two `int[]` frames, about 0.5 MB at 240x320, and a full-screen copy each frame |
 | `HC2-Sound: off` | no music |
 | `HC2-Vibra: off` | no vibration |
 

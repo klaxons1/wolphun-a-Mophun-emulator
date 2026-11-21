@@ -77,9 +77,10 @@ final class Game extends GameCanvas implements Runnable {
 
     // ------------------------------------------------------------------ screen
     int W, H;                       // logical screen
-    Image buf; Graphics g;          // off-screen frame
-    Graphics screen;
-    int[] fb, sbuf, xmap; int sw, sh, ox, oy;   // scaled output (sbuf == null: 1:1)
+    Graphics screen;                // the GameCanvas back buffer (already double-buffered)
+    Graphics g;                     // where the game draws: screen translated to (ox, oy), or buf
+    Image buf; int[] fb, sbuf, xmap; // only with "HC2-Scale: on": logical frame + scaled copy
+    int sw, sh, ox, oy;
     Font font; int fh;              // system font and its height
     int clipX, clipY, clipW, clipH;
 
@@ -165,9 +166,11 @@ final class Game extends GameCanvas implements Runnable {
     boolean isGameState(){ return state==ST_INTRO || state==ST_PLAY; }
 
     /**
-     * Picks the logical screen: the three layouts of the game (176x208, 128x160, 128x128); the
-     * picture is scaled up (nearest neighbour) when that makes it at least 25% bigger.
-     * JAD "HC2-Screen: WxH" forces a size, "HC2-Scale: off" disables scaling.
+     * Picks the logical screen: the three layouts of the game (176x208, 128x160, 128x128),
+     * centred on the display. The game draws straight into the GameCanvas back buffer -- no frame
+     * buffer of its own in the heap. JAD "HC2-Screen: WxH" forces a size; "HC2-Scale: on" turns
+     * on nearest-neighbour up-scaling (when it makes the picture at least 25% bigger), which
+     * costs an off-screen image + two int[] frames (~0.5 MB at 240x320) and a copy per frame.
      */
     void chooseScreen(int cw, int ch){
         String forced=midlet.getAppProperty("HC2-Screen");
@@ -184,18 +187,22 @@ final class Game extends GameCanvas implements Runnable {
             else { W=128; H=128; }
         }
         if(H>216) H=216;
-        buf=Image.createImage(W, H);
-        g=buf.getGraphics();
         int s=Math.min((cw<<8)/W, (ch<<8)/H);
         String sc=midlet.getAppProperty("HC2-Scale");
-        boolean noScale = sc!=null && sc.trim().equalsIgnoreCase("off");
-        if(s>=320 && !noScale){
+        boolean scale = sc!=null && sc.trim().equalsIgnoreCase("on");
+        if(s>=320 && scale){
             sw=(W*s)>>8; sh=(H*s)>>8;
+            buf=Image.createImage(W, H);
+            g=buf.getGraphics();
             fb=new int[W*H]; sbuf=new int[sw*sh]; xmap=new int[sw];
             for(int x=0;x<sw;x++) xmap[x]=(x<<8)/s;
         } else { sw=W; sh=H; }
         ox=(cw-sw)/2; oy=(ch-sh)/2;
         if(ox<0) ox=0; if(oy<0) oy=0;
+        if(sbuf==null){
+            g=screen;
+            g.translate(ox, oy);
+        }
         String snd=midlet.getAppProperty("HC2-Sound");
         if(snd!=null && snd.trim().equalsIgnoreCase("off")) sound=false;
         String vib=midlet.getAppProperty("HC2-Vibra");
@@ -208,11 +215,8 @@ final class Game extends GameCanvas implements Runnable {
         if(paused){
             synchronized(this){ while(paused && !quit){ try { wait(500); } catch(InterruptedException e){} } }
             if(quit) exitGame();
-            screen.setColor(0); screen.fillRect(0, 0, getWidth(), getHeight());
         }
-        if(sbuf==null){
-            screen.drawImage(buf, ox, oy, Graphics.TOP|Graphics.LEFT);
-        } else {
+        if(sbuf!=null){
             buf.getRGB(fb, 0, W, 0, 0, W, H);
             int[] s=sbuf, f=fb, xm=xmap; int prev=-1;
             for(int y=0;y<sh;y++){
@@ -332,6 +336,9 @@ final class Game extends GameCanvas implements Runnable {
     void clip(int x0, int y0, int x1, int y1){
         if(x0>x1){ int t=x0; x0=x1; x1=t; }
         if(y0>y1){ int t=y0; y0=y1; y1=t; }
+        // never outside the logical screen (the canvas around it is the black border)
+        if(x0<0) x0=0; if(y0<0) y0=0;
+        if(x1>W-1) x1=W-1; if(y1>H-1) y1=H-1;
         clipX=x0; clipY=y0; clipW=x1-x0+1; clipH=y1-y0+1;
         g.setClip(clipX, clipY, clipW, clipH);
     }
