@@ -174,11 +174,17 @@ readable Java class that also compiles and runs on the emulator's SDK. It is ver
 frame against the interpreter (`verify-decompiled.sh`). See [docs/DECOMPILER.md](docs/DECOMPILER.md),
 and [docs/MPN_FORMAT.md](docs/MPN_FORMAT.md) for the `.mpn`/VMGP file format and the PIP2 instruction set.
 
+A decompiled game can also be built as a **J2ME MIDlet** for ordinary Java phones (MIDP 2.0 /
+CLDC 1.1) with `desktop/make-j2me-jar.sh`. No emulator runs on the phone: the decompiled class runs
+on a small MIDP port of the SDK. `release/HoneyCave2-j2me.jar` + `.jad` is Honey Cave 2 built this
+way. See [j2me/README.md](j2me/README.md).
+
 ## Repository layout
 ```
 desktop/    Java SE version   (PIP2 VM + software SDK + Swing GUI)
 android/    Android version   (same VM core + SurfaceView + touch UI)
 symbian/    Symbian S60 port  (C++98 VM + software SDK + Avkon UI)
+j2me/       MIDP 2.0 runtime for decompiled games (J2ME phones)
    bin/     ready-to-install .sisx packages
    src/vm/  the portable core: no STL, no libc, no Symbian API
    group/   build for Symbian 9.1 / 9.2+   group2nd/  build for Symbian 8.1

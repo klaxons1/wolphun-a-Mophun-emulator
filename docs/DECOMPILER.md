@@ -90,3 +90,11 @@ sound effects, vibration and save-file writes (over 600 000 SDK calls, every fra
 * Only tested in depth on Honey Cave 2. Other games may hit unrecognised switch patterns
   (an indirect `JPr` that is not a switch becomes an indirect tail call) or SDK functions with
   unknown prototypes (assumed to take 4 arguments and return a value).
+
+## J2ME phones
+
+The generated class also runs on MIDP 2.0 / CLDC 1.1 phones. `desktop/make-j2me-jar.sh` does the
+build: it rewrites the class to Java 1.3 with numbered SDK calls, bundles a prebuilt memory image and
+font, and runs ProGuard to preverify the jar. It runs on `j2me/src`, a CLDC version of
+`Pip2Runtime` plus a MIDP SDK. The result is frame-identical to the desktop runtime in the
+scripted comparison. See [j2me/README.md](../j2me/README.md).
